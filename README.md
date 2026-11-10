@@ -1,0 +1,2 @@
+# ECONOMETRIA_I
+Proyecto_Segundo_Parcial

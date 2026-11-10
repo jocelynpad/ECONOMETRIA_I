@@ -1,0 +1,232 @@
+---
+title: "Determinantes del salario por hora: regresión lineal múltiple"
+format: html
+editor: visual
+
+
+Integrantes del equipo: 
+Zuñiga Santiago Zabdy Samantha
+Padilla Marin Jocelyn
+Carpio Gonzalez Luz Alondra
+---
+
+```{r setup}
+library(wooldridge)
+library(car)       # vif, linearHypothesis
+library(lmtest)    # bptest, resettest, coeftest
+library(sandwich)  # errores robustos
+library(tseries)   # jarque.bera.test
+data("wage1")
+```
+
+# 1. Datos y análisis exploratorio
+
+```{r datos}
+base <- wage1[, c("wage", "lwage", "educ", "exper", "tenure",
+                  "female", "married", "expersq", "tenursq")]
+dim(base)
+summary(base)
+colSums(is.na(base))
+```
+
+## Por qué usar el logaritmo del salario
+
+```{r hist-log}
+par(mfrow = c(1, 2))
+hist(base$wage,  main = "Salario (nivel)",  xlab = "USD/hora", col = "lightblue")
+hist(base$lwage, main = "Log del salario", xlab = "log(wage)",  col = "darkblue")
+par(mfrow = c(1, 1))
+```
+
+## Relación de lwage con las explicativas
+
+```{r dispersion}
+par(mfrow = c(1, 3))
+for (v in c("educ", "exper", "tenure")) {
+  plot(base[[v]], base$lwage, pch = 19, col = "grey60",
+       xlab = v, ylab = "log(salario)", main = paste("lwage vs", v))
+  lines(lowess(base[[v]], base$lwage), col = "darkblue", lwd = 2)  # curva suavizada
+}
+par(mfrow = c(1, 1))
+```
+
+```{r correlaciones}
+cor(base[, c("lwage", "educ", "exper", "tenure")])
+```
+
+# 2. Modelo 1: lineal en variables
+
+```{r modelo1}
+modelo1 <- lm(lwage ~ educ + exper + tenure, data = base)
+summary(modelo1)
+confint(modelo1)
+```
+
+## Pruebas de hipótesis
+
+```{r hipotesis}
+# Significancia global (H0: todos los coeficientes = 0)
+modelo_nulo <- lm(lwage ~ 1, data = base)
+anova(modelo_nulo, modelo1)
+
+# Significancia conjunta de exper y tenure (H0: ambos = 0)
+linearHypothesis(modelo1, c("exper = 0", "tenure = 0"))
+
+# Un año más de experiencia vale lo mismo que un año más de antigüedad?
+linearHypothesis(modelo1, "exper = tenure")
+```
+
+## Diagnóstico
+
+```{r diagnostico1}
+vif(modelo1)       # multicolinealidad (> 5 o 10 = problema)
+bptest(modelo1)    # H0: homocedasticidad
+resettest(modelo1) # H0: forma funcional correcta
+jarque.bera.test(residuals(modelo1)) # H0: residuos normales
+par(mfrow = c(2, 2)); plot(modelo1); par(mfrow = c(1, 1))
+```
+
+# 3. Modelo 2 y 3: no linealidad (cuadráticos) y centrado
+
+```{r modelo2}
+modelo2 <- lm(lwage ~ educ + exper + expersq + tenure + tenursq, data = base)
+summary(modelo2)
+anova(modelo1, modelo2)   # H0: los términos cuadráticos no aportan
+vif(modelo2)              # VIF alto aquí es "estructural" (x y x^2)
+```
+
+```{r centrado}
+base$exper_c   <- base$exper  - mean(base$exper)
+base$tenure_c  <- base$tenure - mean(base$tenure)
+base$exper_c2  <- base$exper_c^2
+base$tenure_c2 <- base$tenure_c^2
+
+modelo3 <- lm(lwage ~ educ + exper_c + exper_c2 + tenure_c + tenure_c2,
+              data = base)
+summary(modelo3)
+vif(modelo3)  # baja; el ajuste (R2, residuos) es idéntico al modelo 2
+```
+
+```{r}
+anova(modelo1, modelo2) 
+
+# Prueba RESET
+resettest(modelo2) 
+
+# Prueba de Breusch-Pagan
+bptest(modelo2) 
+```
+
+```{r}
+# Breusch-Pagan
+bptest(modelo3)
+
+# RESET
+resettest(modelo3)
+
+# Jarque-Bera
+jarque.bera.test(residuals(modelo3)) 
+
+```
+
+# 4. Modelo 4 y 5: variables dicotómicas
+
+```{r}
+modelo4 <- lm(lwage ~ educ + exper_c + exper_c2 +
+                tenure_c + tenure_c2 + female + married,
+              data = base_proyecto)
+
+summary(modelo4)  
+```
+
+```{r}
+bptest(modelo4)
+
+resettest(modelo4)
+
+jarque.bera.test(residuals(modelo4)) 
+```
+
+```{r modelo45}
+modelo4 <- lm(lwage ~ educ + exper_c + exper_c2 + tenure_c + tenure_c2 +
+                female + married, data = base)
+modelo5 <- lm(lwage ~ educ + exper_c + exper_c2 + tenure_c + tenure_c2 +
+                female, data = base)
+
+anova(modelo3, modelo4)  # aportan female y married juntas?
+anova(modelo5, modelo4)  # aporta married una vez que ya está female?
+```
+
+```{r diagnostico5}
+bptest(modelo5)
+resettest(modelo5)
+jarque.bera.test(residuals(modelo5))
+vif(modelo5)
+
+# Inferencia final: errores estándar ROBUSTOS (HC1)
+coeftest(modelo5, vcov = vcovHC(modelo5, type = "HC1"))
+coefci(modelo5,  vcov = vcovHC(modelo5, type = "HC1"))
+```
+
+# 5. Interpretación en porcentajes y elasticidad
+
+```{r porcentajes}
+b <- coef(modelo5)
+# Efecto exacto de ser mujer (variable dicotómica en modelo log-nivel)
+100 * (exp(b["female"]) - 1)
+# Rendimiento aproximado de un año más de educación (semi-elasticidad)
+100 * b["educ"]
+# Punto de quiebre de la experiencia (en años reales, no centrados)
+mean(base$exper) - b["exper_c"] / (2 * b["exper_c2"])
+```
+
+## Elasticidad verdadera (modelo log-log)
+
+El modelo lwage \~ educ da una *semi-elasticidad* (% de cambio del salario por cada año adicional). Para una *elasticidad* se necesita log() en ambos lados. educ tiene valores 0, por eso se filtra educ \> 0.
+
+```{r elasticidad}
+modelo_elast <- lm(lwage ~ log(educ) + exper_c + exper_c2 +
+                     tenure_c + tenure_c2 + female,
+                   data = subset(base, educ > 0))
+summary(modelo_elast)
+# El coeficiente de log(educ) = % de cambio en el salario ante 1% más de educación
+```
+
+# 6. Predicción: intervalo para el promedio y para un individuo
+
+```{r prediccion}
+# Hombre/mujer con 12 años de educación, 10 de experiencia y 5 de antigüedad
+nuevo <- data.frame(
+  educ      = 12,
+  exper_c   = 10 - mean(base$exper),
+  exper_c2  = (10 - mean(base$exper))^2,
+  tenure_c  = 5  - mean(base$tenure),
+  tenure_c2 = (5 - mean(base$tenure))^2,
+  female    = c(0, 1)
+)
+
+# Intervalo de confianza para el salario PROMEDIO (más angosto)
+ic_prom <- predict(modelo5, nuevo, interval = "confidence", level = 0.95)
+# Intervalo de predicción para UN individuo (más ancho)
+ic_ind  <- predict(modelo5, nuevo, interval = "prediction", level = 0.95)
+
+ic_prom; ic_ind
+
+# Regresar a dólares por hora (exp deshace el log; es una mediana aproximada)
+exp(ic_prom)
+exp(ic_ind)
+```
+
+# 7. Tabla comparativa de modelos
+
+```{r tabla}
+modelos <- list(M1 = modelo1, M2 = modelo2, M3 = modelo3,
+                M4 = modelo4, M5 = modelo5)
+data.frame(
+  Modelo  = names(modelos),
+  R2_aj   = sapply(modelos, function(m) summary(m)$adj.r.squared),
+  AIC     = sapply(modelos, AIC),
+  BIC     = sapply(modelos, BIC)
+)
+# Menor AIC/BIC y mayor R2 ajustado = mejor equilibrio ajuste/simplicidad
+```
